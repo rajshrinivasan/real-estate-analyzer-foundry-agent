@@ -115,3 +115,90 @@ FUNCTION_MAP = {
     "get_crime_index": get_crime_index,
     "get_mortgage_rates": get_mortgage_rates,
 }
+
+# Responses-API tool definitions (flat format, not nested under "function")
+TOOL_DEFINITIONS = [
+    {
+        "type": "function",
+        "name": "get_property_listings",
+        "description": "Fetch current property listing data for a city.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "city": {
+                    "type": "string",
+                    "description": "City name: austin, phoenix, denver, or miami",
+                }
+            },
+            "required": ["city"],
+        },
+        "strict": False,
+    },
+    {
+        "type": "function",
+        "name": "get_neighborhood_stats",
+        "description": "Fetch walkability, transit score, amenities, and average commute time for a city.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "city": {
+                    "type": "string",
+                    "description": "City name: austin, phoenix, denver, or miami",
+                }
+            },
+            "required": ["city"],
+        },
+        "strict": False,
+    },
+    {
+        "type": "function",
+        "name": "get_school_ratings",
+        "description": "Fetch school district rating, top school names, class size, and graduation rate for a city.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "city": {
+                    "type": "string",
+                    "description": "City name: austin, phoenix, denver, or miami",
+                }
+            },
+            "required": ["city"],
+        },
+        "strict": False,
+    },
+    {
+        "type": "function",
+        "name": "get_crime_index",
+        "description": "Fetch violent and property crime indices, trend, and comparison to national average for a city.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "city": {
+                    "type": "string",
+                    "description": "City name: austin, phoenix, denver, or miami",
+                }
+            },
+            "required": ["city"],
+        },
+        "strict": False,
+    },
+    {
+        "type": "function",
+        "name": "get_mortgage_rates",
+        "description": "Fetch current mortgage interest rates.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "loan_type": {
+                    "type": "string",
+                    "description": (
+                        "Loan type: 30yr_fixed, 15yr_fixed, 5_1_arm, jumbo_30yr, or fha_30yr. "
+                        "Defaults to 30yr_fixed."
+                    ),
+                }
+            },
+            "required": [],
+        },
+        "strict": False,
+    },
+]

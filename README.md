@@ -6,7 +6,7 @@ An Azure AI Foundry agent that answers natural-language questions about resident
 
 ```
 Sequential: 1.2 + 0.8 + 1.5 + 0.9 + 0.5 = 4.9 s
-Concurrent: max(1.2, 0.8, 1.5, 0.9, 0.5) = 1.5 s   (3.3× faster)
+Concurrent: max(1.2, 0.8, 1.5, 0.9, 0.5) = 1.5 s   (3.3x faster)
 ```
 
 Ships two interfaces: an interactive **CLI** and a **FastAPI web UI**.
@@ -16,33 +16,35 @@ Ships two interfaces: an interactive **CLI** and a **FastAPI web UI**.
 ## Architecture
 
 ```
-┌────────────────────┐    ┌────────────────────┐
-│        CLI         │    │      Web UI        │
-│     agent.py       │    │  app.py · FastAPI  │
-└─────────┬──────────┘    └──────────┬─────────┘
-          └──────────────┬───────────┘
-                         │
-            ┌────────────▼────────────┐
-            │      AgentSession       │
-            │  orchestration layer    │
-            └────────────┬────────────┘
-                         │
-            ┌────────────▼────────────┐
-            │  Azure AI Foundry Agent │
-            │  gpt-4o · tool routing  │
-            └────────────┬────────────┘
-                         │
-               asyncio.gather()
-                         │
-    ┌──────┬─────────────┼──────────┬──────┐
-    ▼      ▼             ▼          ▼      ▼
++--------------------+    +--------------------+
+|        CLI         |    |      Web UI        |
+|     agent.py       |    |  app.py / FastAPI  |
++--------+-----------+    +-----------+--------+
+         +------------------+---------+
+                            |
+            +---------------v--------------+
+            |        AgentSession          |
+            |  orchestration layer         |
+            |  Responses API /             |
+            |  previous_response_id        |
+            +---------------+--------------+
+                            |
+            +---------------v--------------+
+            |    Azure AI Foundry          |
+            |    gpt-4o / Responses API    |
+            +---------------+--------------+
+                            |
+                  asyncio.gather()
+                            |
+    +------+--------+-------+------+------+
+    v      v        v       v      v
 [List.] [Neigh.] [Schools] [Crime] [Mortg.]
-  1.2s    0.8s     1.5s     0.9s    0.5s
-          │                         │
-          └────────────┬────────────┘
-                       ▼
-                   data.py
-             simulated data stores
+  1.2s    0.8s    1.5s     0.9s    0.5s
+          |                        |
+          +----------+-------------+
+                     v
+                  data.py
+            simulated data stores
 ```
 
 ---
@@ -53,7 +55,7 @@ Ships two interfaces: an interactive **CLI** and a **FastAPI web UI**.
 14-real-estate-analyzer/
 ├── agent.py               # AgentSession class + CLI entry point
 ├── app.py                 # FastAPI web application
-├── tools.py               # Five async tool functions
+├── tools.py               # Five async tool functions + TOOL_DEFINITIONS
 ├── data.py                # Simulated market data stores
 ├── prompts/
 │   └── system_prompt.txt  # Agent system instructions
@@ -129,38 +131,90 @@ The test suite covers all tool functions and the concurrency benchmark. No Azure
 pytest -v
 ```
 
-Sample output:
-
 ```
-test_tools.py::test_get_property_listings[austin] PASSED
-test_tools.py::test_get_property_listings[phoenix] PASSED
-test_tools.py::test_get_property_listings[denver] PASSED
-test_tools.py::test_get_property_listings[miami] PASSED
+test_tools.py::test_get_property_listings_known_city[austin] PASSED
+test_tools.py::test_get_property_listings_known_city[phoenix] PASSED
+test_tools.py::test_get_property_listings_known_city[denver] PASSED
+test_tools.py::test_get_property_listings_known_city[miami] PASSED
 test_tools.py::test_get_property_listings_unknown_city PASSED
 test_tools.py::test_get_property_listings_case_insensitive PASSED
-test_tools.py::test_get_neighborhood_stats[austin] PASSED
-...
+test_tools.py::test_get_neighborhood_stats_known_city[austin] PASSED
+test_tools.py::test_get_neighborhood_stats_known_city[phoenix] PASSED
+test_tools.py::test_get_neighborhood_stats_known_city[denver] PASSED
+test_tools.py::test_get_neighborhood_stats_known_city[miami] PASSED
+test_tools.py::test_get_neighborhood_stats_unknown_city PASSED
+test_tools.py::test_get_school_ratings_known_city[austin] PASSED
+test_tools.py::test_get_school_ratings_known_city[phoenix] PASSED
+test_tools.py::test_get_school_ratings_known_city[denver] PASSED
+test_tools.py::test_get_school_ratings_known_city[miami] PASSED
+test_tools.py::test_get_school_ratings_unknown_city PASSED
+test_tools.py::test_get_crime_index_known_city[austin] PASSED
+test_tools.py::test_get_crime_index_known_city[phoenix] PASSED
+test_tools.py::test_get_crime_index_known_city[denver] PASSED
+test_tools.py::test_get_crime_index_known_city[miami] PASSED
+test_tools.py::test_get_crime_index_unknown_city PASSED
+test_tools.py::test_get_mortgage_rates_default PASSED
+test_tools.py::test_get_mortgage_rates_all_types[30yr_fixed] PASSED
+test_tools.py::test_get_mortgage_rates_all_types[15yr_fixed] PASSED
+test_tools.py::test_get_mortgage_rates_all_types[5_1_arm] PASSED
+test_tools.py::test_get_mortgage_rates_all_types[jumbo_30yr] PASSED
+test_tools.py::test_get_mortgage_rates_all_types[fha_30yr] PASSED
+test_tools.py::test_get_mortgage_rates_unknown_type_falls_back PASSED
+test_tools.py::test_function_map_contains_all_tools PASSED
+test_tools.py::test_function_map_values_are_callable PASSED
 test_tools.py::test_concurrent_execution_is_faster_than_sequential PASSED
 
-28 passed in 3.07s
+31 passed in 29.90s
 ```
 
 ---
 
-## Sample timing output (CLI)
+## End-to-end run
+
+Full run against the live Azure AI Foundry endpoint:
 
 ```
+$ python agent.py
+Real Estate Market Analyzer
+Supported cities: Austin, Phoenix, Denver, Miami
+Type 'exit' to quit.
+
 You: Analyse Austin for a family buyer with a $500k budget.
 
   [tools] batch 1: 5 call(s) concurrently:
-    → get_property_listings({'city': 'austin'})
-    → get_neighborhood_stats({'city': 'austin'})
-    → get_school_ratings({'city': 'austin'})
-    → get_crime_index({'city': 'austin'})
-    → get_mortgage_rates({'loan_type': '30yr_fixed'})
-  [tools] completed in 1.51s (sequential would be ~4.9s)
+    -> get_property_listings({'city': 'austin'})
+    -> get_neighborhood_stats({'city': 'austin'})
+    -> get_school_ratings({'city': 'austin'})
+    -> get_crime_index({'city': 'austin'})
+    -> get_mortgage_rates({'loan_type': '30yr_fixed'})
+  [tools] completed in 1.50s (sequential would be ~4.9s)
 
-Assistant: Austin is a solid **BUY** for family buyers...
+Assistant: Here is an analysis of Austin for a family seeking to buy a home with a $500,000 budget:
+
+### Housing Market Insights
+- **Median Home Price**: $485,000 (fits within your budget).
+- **Active Listings**: 3,240 homes currently for sale.
+- **Median Days on Market**: 18 days.
+- **Price Trend YoY**: +4.2%, showing moderate appreciation.
+- **Inventory Supply**: 2.1 months (competitive market).
+
+### Neighbourhood
+- Walkability 52, Transit Score 38.
+- Amenities: tech hub, live music, parks, UT campus proximity.
+- Average commute: 28 minutes.
+
+### Schools
+- District rating 7.8/10. Top: Liberal Arts & Science Academy, Ann Richards School.
+- Graduation rate 91.2%.
+
+### Safety
+- Violent crime index 32 (12 pts below national avg, declining trend).
+
+### Mortgage
+- 30-year fixed: 6.85%. FHA option: 6.61%.
+
+### Verdict
+Austin is a solid **BUY** for family buyers at this budget level. Strong schools, improving safety, and steady 4.2% annual appreciation make it attractive for long-term ownership.
 ```
 
 ---

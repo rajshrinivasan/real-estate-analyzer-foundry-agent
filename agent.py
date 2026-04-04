@@ -8,7 +8,10 @@ Total wait time equals the slowest tool, not the sum.
   Sequential estimate: 1.2 + 0.8 + 1.5 + 0.9 + 0.5 = 4.9 seconds
   Concurrent:          max(1.2, 0.8, 1.5, 0.9, 0.5) = 1.5 seconds
 
-Uses the azure-ai-projects async client (azure.ai.projects.aio) throughout.
+Uses azure-ai-projects 2.x + openai SDK Responses API:
+  - AIProjectClient.get_openai_client() → AsyncOpenAI pointed at Foundry
+  - client.responses.create() with previous_response_id maintains conversation
+  - No persistent thread or assistant objects needed
 """
 
 import asyncio
@@ -21,10 +24,9 @@ from pathlib import Path
 
 from azure.identity.aio import DefaultAzureCredential
 from azure.ai.projects.aio import AIProjectClient
-from azure.ai.projects.models import FunctionTool, ToolSet
 from dotenv import load_dotenv
 
-from tools import FUNCTION_MAP
+from tools import FUNCTION_MAP, TOOL_DEFINITIONS
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -48,9 +50,9 @@ LATENCY_MAP = {
 @dataclass
 class ToolBatch:
     """One round of concurrent tool calls (a single asyncio.gather invocation)."""
-    calls: list[dict]        # [{"name": str, "args": dict}, ...]
-    elapsed: float           # actual wall-clock seconds
-    sequential_estimate: float  # sum of individual latencies if run sequentially
+    calls: list[dict]               # [{"name": str, "args": dict}, ...]
+    elapsed: float                  # actual wall-clock seconds
+    sequential_estimate: float      # sum of individual latencies if run sequentially
 
 
 @dataclass
@@ -62,7 +64,7 @@ class QueryResult:
 
 class AgentSession:
     """
-    Manages an Azure AI Foundry agent lifecycle and handles concurrent tool dispatch.
+    Manages conversation state with an Azure AI Foundry model via the Responses API.
 
     Use as an async context manager:
 
@@ -70,123 +72,98 @@ class AgentSession:
             result = await session.send_message("Analyse Austin for a family buyer")
             print(result.response)
 
-    A single thread is maintained for the lifetime of the session so the model
-    has conversational context across multiple send_message() calls.
+    Conversation continuity is maintained via previous_response_id — each call
+    to send_message() chains to the previous response so the model retains context.
     """
 
     async def __aenter__(self) -> "AgentSession":
         self._credential = DefaultAzureCredential()
-        self._client = AIProjectClient(
+        project_client = AIProjectClient(
             endpoint=PROJECT_ENDPOINT,
             credential=self._credential,
         )
-        await self._client.__aenter__()
-
-        toolset = ToolSet()
-        toolset.add(FunctionTool(set(FUNCTION_MAP.values())))
-
-        agent = await self._client.agents.create_agent(
-            model=MODEL_DEPLOYMENT_NAME,
-            name="real-estate-analyzer",
-            instructions=SYSTEM_PROMPT,
-            tools=toolset.definitions,
-        )
-        self._agent_id = agent.id
-
-        thread = await self._client.agents.threads.create()
-        self._thread_id = thread.id
+        # get_openai_client() returns an AsyncOpenAI pointed at the Foundry endpoint
+        self._client = await project_client.get_openai_client()
+        self._previous_response_id: str | None = None
         return self
 
-    async def __aexit__(self, *args) -> None:
-        if hasattr(self, "_agent_id"):
-            try:
-                await self._client.agents.delete_agent(self._agent_id)
-            except Exception:
-                pass
-        await self._client.__aexit__(*args)
+    async def __aexit__(self, *_) -> None:
+        if hasattr(self, "_client"):
+            await self._client.close()
         await self._credential.close()
 
     async def send_message(self, query: str) -> QueryResult:
         """Send a user message and return the assistant response with tool timing metadata."""
-        await self._client.agents.messages.create(
-            thread_id=self._thread_id,
-            role="user",
-            content=query,
-        )
+        create_kwargs: dict = {
+            "model": MODEL_DEPLOYMENT_NAME,
+            "input": query,
+            "instructions": SYSTEM_PROMPT,
+            "tools": TOOL_DEFINITIONS,
+            "store": True,
+        }
+        if self._previous_response_id:
+            create_kwargs["previous_response_id"] = self._previous_response_id
 
-        run = await self._client.agents.runs.create(
-            thread_id=self._thread_id,
-            agent_id=self._agent_id,
-        )
+        response = await self._client.responses.create(**create_kwargs)
 
         tool_batches: list[ToolBatch] = []
 
-        while run.status in ("queued", "in_progress", "requires_action"):
-            if self._has_tool_calls(run):
-                tool_outputs, batch = await self._dispatch_tool_batch(run)
-                tool_batches.append(batch)
-                run = await self._client.agents.runs.submit_tool_outputs(
-                    thread_id=self._thread_id,
-                    run_id=run.id,
-                    tool_outputs=tool_outputs,
-                )
-            else:
-                await asyncio.sleep(0.5)
-                run = await self._client.agents.runs.get(
-                    thread_id=self._thread_id,
-                    run_id=run.id,
-                )
+        # Tool-call loop: the model may request multiple rounds of tool calls
+        while True:
+            tool_calls = [item for item in response.output if item.type == "function_call"]
+            if not tool_calls:
+                break
 
-        if run.status == "failed":
-            raise RuntimeError(f"Run failed: {run.last_error}")
+            tool_outputs, batch = await self._dispatch_tool_batch(tool_calls)
+            tool_batches.append(batch)
 
-        response = await self._extract_latest_response()
-        return QueryResult(response=response, tool_batches=tool_batches)
+            response = await self._client.responses.create(
+                model=MODEL_DEPLOYMENT_NAME,
+                previous_response_id=response.id,
+                input=tool_outputs,
+                tools=TOOL_DEFINITIONS,
+                store=True,
+            )
 
-    async def _dispatch_tool_batch(self, run) -> tuple[list[dict], ToolBatch]:
-        """Execute all tool calls in one run step concurrently via asyncio.gather()."""
-        tool_calls = run.required_action.submit_tool_outputs.tool_calls
-        calls_info = [
-            {"name": tc.function.name, "args": json.loads(tc.function.arguments)}
-            for tc in tool_calls
-        ]
-        sequential_est = sum(
-            LATENCY_MAP.get(tc.function.name, 1.0) for tc in tool_calls
+        self._previous_response_id = response.id
+        return QueryResult(
+            response=self._extract_text(response),
+            tool_batches=tool_batches,
         )
 
+    async def _dispatch_tool_batch(self, tool_calls) -> tuple[list[dict], ToolBatch]:
+        """Execute all tool calls concurrently via asyncio.gather()."""
+        calls_info = [
+            {"name": tc.name, "args": json.loads(tc.arguments)}
+            for tc in tool_calls
+        ]
+        sequential_est = sum(LATENCY_MAP.get(tc.name, 1.0) for tc in tool_calls)
+
         t0 = time.perf_counter()
-        outputs = await asyncio.gather(*[self._call_tool(tc) for tc in tool_calls])
+        results = await asyncio.gather(*[
+            FUNCTION_MAP[tc.name](**json.loads(tc.arguments)) for tc in tool_calls
+        ])
         elapsed = time.perf_counter() - t0
 
-        batch = ToolBatch(
+        tool_outputs = [
+            {"type": "function_call_output", "call_id": tc.call_id, "output": result}
+            for tc, result in zip(tool_calls, results)
+        ]
+        return tool_outputs, ToolBatch(
             calls=calls_info,
             elapsed=elapsed,
             sequential_estimate=sequential_est,
         )
-        return list(outputs), batch
-
-    async def _call_tool(self, tool_call) -> dict:
-        fn_name = tool_call.function.name
-        fn_args = json.loads(tool_call.function.arguments)
-        result = await FUNCTION_MAP[fn_name](**fn_args)
-        return {"tool_call_id": tool_call.id, "output": result}
-
-    async def _extract_latest_response(self) -> str:
-        messages = await self._client.agents.messages.list(thread_id=self._thread_id)
-        for msg in messages:
-            if msg.role == "assistant":
-                return "\n".join(
-                    c.text.value for c in msg.content if hasattr(c, "text")
-                )
-        return ""
 
     @staticmethod
-    def _has_tool_calls(run) -> bool:
-        return (
-            run.status == "requires_action"
-            and run.required_action is not None
-            and run.required_action.submit_tool_outputs is not None
-        )
+    def _extract_text(response) -> str:
+        parts = []
+        for item in response.output:
+            if item.type == "message":
+                for content in item.content:
+                    if hasattr(content, "text"):
+                        parts.append(content.text)
+        return "\n".join(parts)
 
 
 # ── CLI entry point ───────────────────────────────────────────────────────────
@@ -210,7 +187,7 @@ async def main():
 
             try:
                 result = await session.send_message(user_input)
-            except RuntimeError as exc:
+            except Exception as exc:
                 print(f"Error: {exc}\n")
                 continue
 
