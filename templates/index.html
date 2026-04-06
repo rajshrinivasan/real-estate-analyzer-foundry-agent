@@ -23,6 +23,30 @@
     }
     header h1 { font-size: 1.15rem; font-weight: 700; }
     header p  { font-size: 0.78rem; opacity: 0.75; margin-top: 0.2rem; }
+    .city-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      margin-top: 0.5rem;
+    }
+    .city-pill {
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.3);
+      border-radius: 999px;
+      padding: 0.15rem 0.65rem;
+      font-size: 0.73rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      cursor: pointer;
+      transition: background 0.15s;
+      user-select: none;
+    }
+    .city-pill:hover { background: rgba(255,255,255,0.28); }
+    .supported-label {
+      font-size: 0.72rem;
+      opacity: 0.6;
+      align-self: center;
+    }
 
     #chat {
       flex: 1;
@@ -148,7 +172,14 @@
 
 <header>
   <h1>Real Estate Market Analyzer</h1>
-  <p>Powered by Azure AI Foundry &middot; Cities: Austin &middot; Phoenix &middot; Denver &middot; Miami</p>
+  <p>Powered by Azure AI Foundry</p>
+  <div class="city-pills">
+    <span class="supported-label">Supported cities only:</span>
+    <span class="city-pill" data-city="Austin">Austin</span>
+    <span class="city-pill" data-city="Phoenix">Phoenix</span>
+    <span class="city-pill" data-city="Denver">Denver</span>
+    <span class="city-pill" data-city="Miami">Miami</span>
+  </div>
 </header>
 
 <div id="chat"></div>
@@ -263,10 +294,20 @@
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   });
 
+  // City pills populate the input field
+  document.querySelectorAll('.city-pill').forEach(pill => {
+    pill.addEventListener('click', () => {
+      input.value = `Analyse ${pill.dataset.city} for a buyer`;
+      input.focus();
+    });
+  });
+
   // Welcome message
   appendMessage('assistant',
     'Hello! I\'m your real estate market analyst.\n\n' +
-    'Ask me about Austin, Phoenix, Denver, or Miami. Try:\n\n' +
+    'I can only answer questions about these 4 cities: Austin, Phoenix, Denver, and Miami. ' +
+    'Queries about other cities will return an error.\n\n' +
+    'Try:\n' +
     '  \u2022 "Analyse Austin for a family buyer with a $500k budget"\n' +
     '  \u2022 "Compare Denver and Phoenix for an investment property"\n' +
     '  \u2022 "What are current mortgage rates?"\n' +

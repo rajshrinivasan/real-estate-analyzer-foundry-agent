@@ -9,7 +9,12 @@ Sequential: 1.2 + 0.8 + 1.5 + 0.9 + 0.5 = 4.9 s
 Concurrent: max(1.2, 0.8, 1.5, 0.9, 0.5) = 1.5 s   (3.3x faster)
 ```
 
+**Live data:** walkability scores are computed in real-time from OpenStreetMap via `osmnx` — no API key required. Results are cached in memory so only the first request per city pays the download cost (~5–10 s); subsequent requests are instant.
+
 Ships two interfaces: an interactive **CLI** and a **FastAPI web UI**.
+
+> **Supported cities:** Austin · Phoenix · Denver · Miami only.
+> Queries about other cities return an error. Data for additional cities requires entries in `data.py`, `walkability.py`, `TOOL_DEFINITIONS`, and the system prompt.
 
 ---
 
@@ -24,7 +29,6 @@ Ships two interfaces: an interactive **CLI** and a **FastAPI web UI**.
                             |
             +---------------v--------------+
             |        AgentSession          |
-            |  orchestration layer         |
             |  Responses API /             |
             |  previous_response_id        |
             +---------------+--------------+
@@ -39,12 +43,11 @@ Ships two interfaces: an interactive **CLI** and a **FastAPI web UI**.
     +------+--------+-------+------+------+
     v      v        v       v      v
 [List.] [Neigh.] [Schools] [Crime] [Mortg.]
-  1.2s    0.8s    1.5s     0.9s    0.5s
+  1.2s    live    1.5s     0.9s    0.5s
           |                        |
-          +----------+-------------+
-                     v
-                  data.py
-            simulated data stores
+          v                        v
+   walkability.py              data.py
+   osmnx / OSM (live)     static data stores
 ```
 
 ---
@@ -56,7 +59,8 @@ Ships two interfaces: an interactive **CLI** and a **FastAPI web UI**.
 ├── agent.py               # AgentSession class + CLI entry point
 ├── app.py                 # FastAPI web application
 ├── tools.py               # Five async tool functions + TOOL_DEFINITIONS
-├── data.py                # Simulated market data stores
+├── data.py                # Static market data stores
+├── walkability.py         # Live walkability scores via osmnx / OpenStreetMap
 ├── prompts/
 │   └── system_prompt.txt  # Agent system instructions
 ├── templates/
@@ -127,6 +131,8 @@ Is Miami a good market to buy in?
 
 The test suite covers all tool functions and the concurrency benchmark. No Azure credentials required.
 
+The neighbourhood tests trigger real osmnx downloads on first run (~2 min); subsequent runs use the in-memory cache and complete in seconds.
+
 ```bash
 pytest -v
 ```
@@ -164,14 +170,14 @@ test_tools.py::test_function_map_contains_all_tools PASSED
 test_tools.py::test_function_map_values_are_callable PASSED
 test_tools.py::test_concurrent_execution_is_faster_than_sequential PASSED
 
-31 passed in 29.90s
+31 passed in 125.46s
 ```
 
 ---
 
 ## End-to-end run
 
-Full run against the live Azure AI Foundry endpoint:
+Full run against the live Azure AI Foundry endpoint (osmnx cache warm):
 
 ```
 $ python agent.py
@@ -179,15 +185,19 @@ Real Estate Market Analyzer
 Supported cities: Austin, Phoenix, Denver, Miami
 Type 'exit' to quit.
 
-You: Analyse Austin for a family buyer with a $500k budget.
+You: Compare Denver and Phoenix for an investment property.
 
-  [tools] batch 1: 5 call(s) concurrently:
-    -> get_property_listings({'city': 'austin'})
-    -> get_neighborhood_stats({'city': 'austin'})
-    -> get_school_ratings({'city': 'austin'})
-    -> get_crime_index({'city': 'austin'})
-    -> get_mortgage_rates({'loan_type': '30yr_fixed'})
-  [tools] completed in 1.50s (sequential would be ~4.9s)
+  [tools] batch 1: 9 call(s) concurrently:
+    → get_property_listings({'city': 'denver'})
+    → get_neighborhood_stats({'city': 'denver'})
+    → get_school_ratings({'city': 'denver'})
+    → get_crime_index({'city': 'denver'})
+    → get_property_listings({'city': 'phoenix'})
+    → get_neighborhood_stats({'city': 'phoenix'})
+    → get_school_ratings({'city': 'phoenix'})
+    → get_crime_index({'city': 'phoenix'})
+    → get_mortgage_rates({'loan_type': '30yr_fixed'})
+  [tools] completed in 25.56s (sequential would be ~9.3s)
 
 Assistant: Here is an analysis of Austin for a family seeking to buy a home with a $500,000 budget:
 

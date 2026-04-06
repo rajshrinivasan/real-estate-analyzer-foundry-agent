@@ -29,3 +29,6 @@ Thumbs.db
 
 # Temporary / generated files
 tmp/
+
+# osmnx HTTP response cache
+cache/

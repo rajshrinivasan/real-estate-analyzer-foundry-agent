@@ -14,6 +14,7 @@ import asyncio
 import json
 
 from data import LISTINGS_DATA, MORTGAGE_RATES, NEIGHBORHOOD_DATA, SCHOOL_DATA, CRIME_DATA
+from walkability import get_walkability
 
 
 async def get_property_listings(city: str) -> str:
@@ -44,11 +45,17 @@ async def get_neighborhood_stats(city: str) -> str:
     Returns:
         Walkability score, transit score, key amenities, and average commute time.
     """
-    await asyncio.sleep(0.8)  # simulate neighbourhood API latency
     city_key = city.lower().strip()
     data = NEIGHBORHOOD_DATA.get(city_key)
     if not data:
         return json.dumps({"error": f"No neighbourhood data for {city}"})
+
+    # Replace static walkability with live OpenStreetMap computation.
+    # Falls back to the hardcoded value if osmnx fails.
+    live_score = await get_walkability(city_key)
+    if live_score is not None:
+        data = {**data, "walkability": live_score}
+
     return json.dumps({"city": city, **data})
 
 
