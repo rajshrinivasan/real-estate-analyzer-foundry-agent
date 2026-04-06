@@ -11,6 +11,12 @@ Concurrent: max(1.2, 0.8, 1.5, 0.9, 0.5) = 1.5 s   (3.3x faster)
 
 **Live data:** walkability scores are computed in real-time from OpenStreetMap via `osmnx` — no API key required. Results are cached in memory so only the first request per city pays the download cost (~5–10 s); subsequent requests are instant.
 
+`osmnx` is synchronous, which would normally block the event loop and cancel out the concurrency benefit. The fix is one line — `run_in_executor` offloads the computation to a thread while all other tool calls keep running concurrently:
+
+```python
+score = await loop.run_in_executor(None, functools.partial(_compute_walkability, city_key))
+```
+
 Ships two interfaces: an interactive **CLI** and a **FastAPI web UI**.
 
 > **Supported cities:** Austin · Phoenix · Denver · Miami only.
