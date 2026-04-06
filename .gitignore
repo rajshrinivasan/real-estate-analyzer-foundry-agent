@@ -32,3 +32,6 @@ tmp/
 
 # osmnx HTTP response cache
 cache/
+
+# Personal exercises (local only)
+exercises/
